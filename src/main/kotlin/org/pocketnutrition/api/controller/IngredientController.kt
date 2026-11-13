@@ -1,6 +1,7 @@
 package org.pocketnutrition.api.controller
 
 import org.pocketnutrition.api.dto.FoodItemRequest
+import org.pocketnutrition.api.dto.IngredientDetailResponse
 import org.pocketnutrition.api.dto.IngredientSuggestion
 import org.pocketnutrition.api.dto.IngredientSuggestionWithNutrition
 import org.pocketnutrition.api.dto.NutritionalProfileResponse
@@ -140,8 +141,7 @@ class IngredientController(
             brand = suggestion.brand,
             foodGroup = suggestion.foodGroup,
             servingMode = suggestion.servingMode,
-            unitLabelFr = suggestion.unitLabelFr,
-            unitLabelEn = suggestion.unitLabelEn,
+            unitLabels = suggestion.unitLabels,
             recipeComponents = suggestion.recipeComponents?.map { c ->
                 RecipeComponentResponse(
                     weightG = c.weightG,
@@ -150,6 +150,25 @@ class IngredientController(
                 )
             },
         )
+
+    @Operation(
+        summary = "Get full reference detail for one ingredient",
+        description = "Returns the knowledge-base detail behind one ingredient or product — name, " +
+            "food group, reference weight, serving units, and reference nutrition per 100 g. Used to " +
+            "show current known values alongside a correction form (e.g. the feedback dialog).",
+    )
+    @ApiResponses(
+        ApiResponse(responseCode = "200", description = "Ingredient detail"),
+        ApiResponse(responseCode = "404", description = "Unknown ingredient id")
+    )
+    @GetMapping("/{id}")
+    fun detail(
+        @Parameter(description = "Ingredient id, as returned by /ingredients/search", required = true)
+        @PathVariable id: String,
+    ): ResponseEntity<IngredientDetailResponse> {
+        val result = ingredientSearchService.detail(id) ?: return ResponseEntity.notFound().build()
+        return ResponseEntity.ok(result)
+    }
 
     @Operation(summary = "Look up a product by EAN-13 barcode")
     @ApiResponses(
@@ -160,8 +179,10 @@ class IngredientController(
     fun barcode(
         @Parameter(description = "EAN-13 barcode", required = true)
         @PathVariable ean13: String,
+        @Parameter(description = "Preferred language code (fr, en)")
+        @RequestParam(required = false) lang: String?,
     ): ResponseEntity<IngredientSuggestionWithNutrition> {
-        val result = barcodeService.findByBarcode(ean13) ?: return ResponseEntity.notFound().build()
+        val result = barcodeService.findByBarcode(ean13, lang) ?: return ResponseEntity.notFound().build()
         return ResponseEntity.ok(result)
     }
 }

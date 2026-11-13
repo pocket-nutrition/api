@@ -34,22 +34,18 @@ org.pocketnutrition.api/
     MlPredictionRequest.kt    # snake_case — matches Python FastAPI schema
     MlPredictionResponse.kt
   model/
-    CachedNutritionResult.kt  # Elasticsearch @Document
-  model/
     CachedNutritionResult.kt      # Elasticsearch @Document
-    IngredientEntity.kt           # JPA @Entity → ingredients table (id, food_group)
-    IngredientVariantEntity.kt    # JPA @Entity → ingredient_variants (24 nutrient columns, source priority)
+    CiqualFoodEntity.kt, EfsaDrvValueEntity.kt, FeedbackReport.kt, *VoteTally.kt  # JPA entities
   repository/
     NutritionCacheRepository.kt
-    IngredientRepository.kt        # JpaRepository<IngredientEntity, String>
-    IngredientVariantRepository.kt # findByIngredientIdPrioritized (ciqual→mccance→usda→reference)
+    CiqualFoodRepository.kt, EfsaDrvValueRepository.kt, FeedbackRepository.kt, *VoteTallyRepository.kt
   service/
     CacheService.kt               # interface
     ElasticsearchCacheService.kt  # implementation
     MlClientService.kt            # interface
     HttpMlClientService.kt        # implementation (RestClient → pocket-nutrition-ml)
     NutritionService.kt           # orchestrator: cache-or-predict
-    RawProfileLookupService.kt    # reads ingredient_variants + ingredients.food_group from PostgreSQL
+    RawProfileLookupService.kt    # raw profile + food_group from the product_search ES index
     IngredientResolutionService.kt # internal name→slug resolver (used by NutritionService)
     IngredientSearchService.kt     # search-as-you-type (used by IngredientController)
   config/
@@ -146,7 +142,7 @@ docker build -t pocket-nutrition-api:local .
 
 | Test class | Scope | External deps |
 |---|---|---|
-| `ApiApplicationTests` | Full context | `@MockitoBean NutritionCacheRepository`, `IngredientResolutionService`, `IngredientSearchService`, `IngredientVariantRepository`, `IngredientRepository` |
+| `ApiApplicationTests` | Full context | `@MockitoBean NutritionCacheRepository`, `IngredientResolutionService`, `IngredientSearchService` |
 | `NutritionControllerTest` | `@WebMvcTest` | `@MockitoBean NutritionService` |
 | `IngredientControllerTest` | `@WebMvcTest` | `@MockitoBean IngredientSearchService` |
 | `NutritionServiceTest` | Unit (Mockito) | `@Mock CacheService`, `@Mock MlClientService` |
@@ -195,20 +191,12 @@ Append-only rules for anything mobile clients consume:
 
 ## CI/CD
 
-No CI pipeline is included yet. Recommended: a GitHub Actions workflow under `.github/workflows/`
-that runs `./mvnw verify -B` on every push/PR, then builds and pushes a Docker image (see
-`Dockerfile`) to the registry of your choice (GHCR, Docker Hub, etc.).
-
-Suggested image tag convention: always `:<full-commit-sha>`, plus `:latest` on default-branch
-pushes or `:<tag-name>` on `v*.*.*` tags.
-
-Suggested secrets/variables for such a workflow:
-
-| Name | Kind | Purpose |
-|---|---|---|
-| `REGISTRY_URL`, `REGISTRY_USERNAME` | variables | Container registry to push to |
-| `REGISTRY_TOKEN` | secret | Registry auth token |
-| `KUBECONFIG_B64` | secret | Only needed if you also automate cluster deploys |
+`.github/workflows/ci.yml` runs `./mvnw verify -B` on every pull request and on pushes to `main`
+(including `OpenApiSnapshotTest`). Pull requests also prove the Docker image builds. On every commit
+that lands on `main` it reserves a CalVer tag (`vYYYY.M.N`, N restarting at 1 each month), pushes
+`ghcr.io/pocket-nutrition/api:<version>` (plus `:latest` and `:<full-sha>`) and creates a GitHub
+Release with the executable jar. It needs no secrets: it uses the workflow's own `GITHUB_TOKEN`.
+`ci-success` is the single required status check.
 
 ## Kubernetes
 

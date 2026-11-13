@@ -10,7 +10,10 @@ class WebConfig : WebMvcConfigurer {
         registry.addMapping("/**")
             .allowedOrigins(
                 "https://showcase.pocketnutrition.org",
+                "https://website.pocketnutrition.org",
                 "https://sandbox.pocketnutrition.org",
+                // The vault web viewer reads GET /reference-intakes to show daily targets.
+                "https://me.pocketnutrition.org",
                 "http://localhost:5173",
                 "http://localhost:4173",
             )

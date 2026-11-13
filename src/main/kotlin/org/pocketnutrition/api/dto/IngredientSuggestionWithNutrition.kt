@@ -61,9 +61,8 @@ data class IngredientSuggestionWithNutrition(
     val foodGroup: String? = null,
     @Schema(description = "Natural measurement mode: 'item' = countable whole units, 'weight' = grams, 'volume' = mL, 'measure' = culinary units; null = weight by default")
     val servingMode: String? = null,
-    @Schema(description = "French display label for one whole unit when serving_mode is 'item' (e.g. 'oeuf')")
-    val unitLabelFr: String? = null,
-    val unitLabelEn: String? = null,
+    @Schema(description = "Display label for one whole unit per available language, when serving_mode is 'item' (e.g. 'oeuf'/'egg')")
+    val unitLabels: List<LocalizedText> = emptyList(),
     @Schema(description = "Recipe components with per-person default weights; only present when productType is 'recipe'")
     val recipeComponents: List<RecipeComponentResponse>? = null,
 )

@@ -7,8 +7,11 @@ import co.elastic.clients.elasticsearch._types.query_dsl.FieldValueFactorModifie
 import co.elastic.clients.elasticsearch._types.query_dsl.FunctionBoostMode
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.pocketnutrition.api.client.dto.MlRawProfile
+import org.pocketnutrition.api.dto.IngredientDetailResponse
 import org.pocketnutrition.api.dto.IngredientSuggestion
+import org.pocketnutrition.api.dto.LocalizedText
 import org.pocketnutrition.api.dto.RecipeComponent
+import org.pocketnutrition.api.dto.ReferenceNutritionResponse
 import org.pocketnutrition.api.dto.ServingUnit
 import org.pocketnutrition.api.dto.StateMeta
 import org.slf4j.LoggerFactory
@@ -18,6 +21,20 @@ internal data class LabelDoc(
     @JsonProperty("lang") val lang: String? = null,
     @JsonProperty("text") val text: String? = null,
 )
+
+/**
+ * Picks the label matching [lang], falling back to French, then to whichever label happens to be
+ * first. The one place this resolution rule is defined — [BarcodeService] uses the exact same
+ * function rather than a second copy of the chain.
+ */
+internal fun List<LabelDoc>?.pickPreferred(lang: String?): LabelDoc? =
+    this?.firstOrNull { it.lang == lang }
+        ?: this?.firstOrNull { it.lang == "fr" }
+        ?: this?.firstOrNull()
+
+/** Converts a raw ES label list to the public [LocalizedText] shape, dropping any entry with no lang or text. */
+internal fun List<LabelDoc>?.toLocalizedTexts(): List<LocalizedText> =
+    this.orEmpty().mapNotNull { d -> d.lang?.let { lang -> d.text?.let { text -> LocalizedText(lang, text) } } }
 
 internal data class StateMetaDoc(
     @JsonProperty("portion_g") val portionG: Double? = null,
@@ -41,8 +58,7 @@ internal data class SearchDoc(
     @JsonProperty("serving_unit_types")  val servingUnitTypes: List<String>? = null,
     @JsonProperty("display_unit")        val displayUnit: String? = null,
     @JsonProperty("serving_mode")        val servingMode: String? = null,
-    @JsonProperty("unit_label_fr")       val unitLabelFr: String? = null,
-    @JsonProperty("unit_label_en")       val unitLabelEn: String? = null,
+    @JsonProperty("unit_labels")         val unitLabels: List<LabelDoc>? = null,
     @JsonProperty("typical_state")           val typicalState: String? = null,
     @JsonProperty("portion_measured_state") val portionMeasuredState: String? = null,
     @JsonProperty("can_eat_raw")         val canEatRaw: Boolean? = null,
@@ -305,9 +321,7 @@ class IngredientSearchService(
 
     private fun toSuggestion(doc: SearchDoc, lang: String?): IngredientSuggestion? {
         val id = doc.productId ?: return null
-        val preferred = doc.labels?.firstOrNull { it.lang == lang }
-            ?: doc.labels?.firstOrNull { it.lang == "fr" }
-            ?: doc.labels?.firstOrNull()
+        val preferred = doc.labels.pickPreferred(lang)
         return IngredientSuggestion(
             ingredientId = id,
             label = preferred?.text ?: id.replace("_", " "),
@@ -325,8 +339,7 @@ class IngredientSearchService(
             brand = doc.brand,
             foodGroup = doc.foodGroup,
             servingMode = doc.servingMode,
-            unitLabelFr = doc.unitLabelFr,
-            unitLabelEn = doc.unitLabelEn,
+            unitLabels = doc.unitLabels.toLocalizedTexts(),
             states = doc.states?.mapValues { (_, v) -> StateMeta(portionG = v.portionG, densityGMl = v.densityGMl) },
         )
     }
@@ -430,6 +443,53 @@ class IngredientSearchService(
     /** Look up a product document by product_id (for BarcodeService and direct lookups). */
     internal fun lookupDocument(productId: String): SearchDoc? = findByProductId(productId)
 
+    /**
+     * Full reference detail for one ingredient — the current known values a client shows
+     * alongside a correction form. Null when [id] is not in the index.
+     */
+    fun detail(id: String): IngredientDetailResponse? = findByProductId(id)?.let { toDetail(id, it) }
+
+    /**
+     * Maps one search document to its detail response. Pulled apart from [detail] so the mapping
+     * — the part worth pinning — is testable without an Elasticsearch client, the same split
+     * [computeServingUnits] already uses.
+     */
+    internal fun toDetail(id: String, doc: SearchDoc): IngredientDetailResponse {
+        // Grouped by whatever lang values are actually present — not an fr/en allowlist — so a
+        // third language surfaces here the day the knowledge base has one, with no code change.
+        val labelsByLang = doc.labels.orEmpty().filter { it.lang != null }.groupBy { it.lang!! }
+        val names = labelsByLang.mapNotNull { (lang, entries) ->
+            entries.firstOrNull()?.text?.let { LocalizedText(lang, it) }
+        }
+        val aliases = labelsByLang.flatMap { (lang, entries) ->
+            entries.drop(1).mapNotNull { it.text }.map { LocalizedText(lang, it) }
+        }
+        val hasNutrition = doc.energyKcal != null || doc.proteinG != null
+        return IngredientDetailResponse(
+            ingredientId = doc.productId ?: id,
+            names = names,
+            aliases = aliases,
+            foodGroup = doc.foodGroup,
+            referenceWeightG = doc.portionG,
+            displayUnit = doc.displayUnit,
+            servingUnits = computeServingUnits(doc),
+            canEatRaw = doc.canEatRaw,
+            canEatCooked = doc.canEatCooked,
+            typicalState = doc.typicalState,
+            referenceNutrition = if (hasNutrition) {
+                ReferenceNutritionResponse(
+                    energyKcal = doc.energyKcal,
+                    proteinG = doc.proteinG,
+                    fatG = doc.fatG,
+                    carbohydratesG = doc.carbohydratesG,
+                    fiberG = doc.fiberG,
+                )
+            } else {
+                null
+            },
+        )
+    }
+
     private fun findByProductId(productId: String): SearchDoc? {
         return try {
             val response = esClient.search({ s ->
@@ -504,15 +564,20 @@ class IngredientSearchService(
 
     internal fun computeServingUnits(doc: SearchDoc): List<ServingUnit> {
         val units = mutableListOf<ServingUnit>()
-        if (doc.servingMode == "item" && doc.unitLabelFr != null && doc.portionG != null) {
-            units += ServingUnit(unit = "item", labelFr = doc.unitLabelFr, labelEn = doc.unitLabelEn, volumeMl = 0.0, grams = doc.portionG)
+        val unitLabels = doc.unitLabels.toLocalizedTexts()
+        if (doc.servingMode == "item" && unitLabels.isNotEmpty() && doc.portionG != null) {
+            units += ServingUnit(unit = "item", labels = unitLabels, volumeMl = 0.0, grams = doc.portionG)
         }
         val density = doc.densityGMl
         if (density != null && !doc.servingUnitTypes.isNullOrEmpty()) {
             doc.servingUnitTypes.forEach { unit ->
                 val volume = UNIT_VOLUMES[unit] ?: return@forEach
-                units += ServingUnit(unit = unit, labelFr = UNIT_LABELS_FR[unit] ?: unit,
-                    volumeMl = volume, grams = Math.round(volume * density * 100.0) / 100.0)
+                units += ServingUnit(
+                    unit = unit,
+                    labels = UNIT_LABELS[unit] ?: listOf(LocalizedText("und", unit)),
+                    volumeMl = volume,
+                    grams = Math.round(volume * density * 100.0) / 100.0,
+                )
             }
         }
         val packageMl = doc.packageSizeMl
@@ -523,8 +588,7 @@ class IngredientSearchService(
         if ((packageMl != null && packageMl > 0) || (packageG != null && packageG > 0)) {
             units += ServingUnit(
                 unit     = "package",
-                labelFr  = doc.unitLabelFr ?: "unité",
-                labelEn  = doc.unitLabelEn ?: "unit",
+                labels   = unitLabels.ifEmpty { DEFAULT_PACKAGE_LABELS },
                 volumeMl = packageMl ?: 0.0,
                 grams    = packageG ?: packageMl ?: 0.0,
             )
@@ -535,8 +599,7 @@ class IngredientSearchService(
         if (servingG != null && servingG > 0) {
             units += ServingUnit(
                 unit     = "serving",
-                labelFr  = doc.unitLabelFr ?: "part",
-                labelEn  = doc.unitLabelEn ?: "serving",
+                labels   = unitLabels.ifEmpty { DEFAULT_SERVING_LABELS },
                 volumeMl = 0.0,
                 grams    = servingG,
             )
@@ -581,17 +644,23 @@ class IngredientSearchService(
             "scoop"        to 30.0,
         )
 
-        private val UNIT_LABELS_FR: Map<String, String> = mapOf(
-            "pinch"        to "pincée",
-            "teaspoon"     to "c.à.c.",
-            "tablespoon"   to "c.à.s.",
-            "cup"          to "tasse",
-            "handful"      to "poignée",
-            "small_handful" to "petite poignée",
-            "glass"        to "verre",
-            "shot"         to "dose",
-            "bowl"         to "bol",
-            "scoop"        to "mesurette",
+        private val UNIT_LABELS: Map<String, List<LocalizedText>> = mapOf(
+            "pinch"         to listOf(LocalizedText("fr", "pincée"), LocalizedText("en", "pinch")),
+            "teaspoon"      to listOf(LocalizedText("fr", "c.à.c."), LocalizedText("en", "tsp")),
+            "tablespoon"    to listOf(LocalizedText("fr", "c.à.s."), LocalizedText("en", "tbsp")),
+            "cup"           to listOf(LocalizedText("fr", "tasse"), LocalizedText("en", "cup")),
+            "handful"       to listOf(LocalizedText("fr", "poignée"), LocalizedText("en", "handful")),
+            "small_handful" to listOf(LocalizedText("fr", "petite poignée"), LocalizedText("en", "small handful")),
+            "glass"         to listOf(LocalizedText("fr", "verre"), LocalizedText("en", "glass")),
+            "shot"          to listOf(LocalizedText("fr", "dose"), LocalizedText("en", "shot")),
+            "bowl"          to listOf(LocalizedText("fr", "bol"), LocalizedText("en", "bowl")),
+            "scoop"         to listOf(LocalizedText("fr", "mesurette"), LocalizedText("en", "scoop")),
         )
+
+        /** Fallback when a package has no knowledge-base unit label at all. */
+        private val DEFAULT_PACKAGE_LABELS = listOf(LocalizedText("fr", "unité"), LocalizedText("en", "unit"))
+
+        /** Fallback when a manufacturer serving has no knowledge-base unit label at all. */
+        private val DEFAULT_SERVING_LABELS = listOf(LocalizedText("fr", "part"), LocalizedText("en", "serving"))
     }
 }

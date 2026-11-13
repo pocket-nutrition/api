@@ -12,8 +12,8 @@ import java.time.Instant
  * A public, anonymous feedback report about an ingredient's data quality.
  *
  * Side-channel inbox: written only by pocket-nutrition-api, read only by pocket-nutrition-community.
- * It is NOT part of the knowledge pipeline — never mirrored to Redis, the YAML files in a
- * private repository, or the raw source tables.
+ * It is NOT part of the knowledge pipeline — never mirrored to Redis, knowledge YAML files,
+ * or the raw source tables.
  */
 @Entity
 @Table(name = "feedback_report")

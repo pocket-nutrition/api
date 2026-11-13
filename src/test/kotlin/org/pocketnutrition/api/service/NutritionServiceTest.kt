@@ -1,5 +1,6 @@
 package org.pocketnutrition.api.service
 
+import org.pocketnutrition.api.client.dto.MlIngredientResult
 import org.pocketnutrition.api.client.dto.MlNutritionalResult
 import org.pocketnutrition.api.client.dto.MlPredictionResponse
 import org.pocketnutrition.api.dto.FoodItemRequest
@@ -10,10 +11,12 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
 import org.mockito.InjectMocks
 import org.mockito.Mock
+import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoInteractions
 import org.mockito.Mockito.`when`
 import org.mockito.junit.jupiter.MockitoExtension
+import org.mockito.kotlin.any
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
 
@@ -85,7 +88,7 @@ class NutritionServiceTest {
     }
 
     @Test
-    fun `cache miss goes directly to ML skipping OFF for non-raw cooking methods`() {
+    fun `cache miss goes to ML for a Ciqual ingredient`() {
         stubResolution("chicken")
         `when`(cacheService.find("chicken", "grilled", "raw")).thenReturn(null)
         val resolvedChicken = ResolvedFoodItem(chickenRequest, "chicken")
@@ -101,6 +104,82 @@ class NutritionServiceTest {
         // Stored value must be per-100g (scale=1 for 100g, so same as ML value)
         assertEquals(165.0, captor.firstValue.energyKcal, 0.001)
         assertEquals("ml", captor.firstValue.source)
+    }
+
+    @Test
+    fun `OFF product bypasses ML and cache, forcing cookingMethod to raw`() {
+        val offRequest = FoodItemRequest(null, 100.0, "g", "grilled", "raw", ingredientId = "off:1234567890123")
+        val offDoc = SearchDoc(
+            productType = "off_product",
+            energyKcal = 250.0, proteinG = 5.0, fatG = 12.0, carbohydratesG = 30.0,
+        )
+        `when`(ingredientSearchService.lookupDocument("off:1234567890123")).thenReturn(offDoc)
+
+        val result = nutritionService.getNutrition(listOf(offRequest))
+
+        assertEquals(1, result.size)
+        assertEquals("off_direct", result[0].source)
+        assertEquals("raw", result[0].cookingMethod)
+        assertEquals(1.0, result[0].confidence)
+        assertEquals(true, result[0].available)
+        assertEquals(250.0, result[0].energyKcal, 0.001)
+        verifyNoInteractions(mlClientService)
+        verifyNoInteractions(cacheService)
+    }
+
+    @Test
+    fun `OFF product with no macro data is marked unavailable despite full confidence`() {
+        val offRequest = FoodItemRequest(null, 100.0, "g", "raw", "raw", ingredientId = "off:0000000000000")
+        val offDoc = SearchDoc(productType = "off_product")
+        `when`(ingredientSearchService.lookupDocument("off:0000000000000")).thenReturn(offDoc)
+
+        val result = nutritionService.getNutrition(listOf(offRequest))
+
+        assertEquals(1, result.size)
+        assertEquals("off_direct", result[0].source)
+        assertEquals(1.0, result[0].confidence)
+        assertEquals(false, result[0].available)
+        verifyNoInteractions(mlClientService)
+        verifyNoInteractions(cacheService)
+    }
+
+    @Test
+    fun `mixed Ciqual and OFF items only send the Ciqual item to ML`() {
+        val offRequest = FoodItemRequest(null, 100.0, "g", "grilled", "raw", ingredientId = "off:1234567890123")
+        val offDoc = SearchDoc(productType = "off_product", energyKcal = 250.0, proteinG = 5.0)
+        stubResolution("chicken")
+        `when`(cacheService.find("chicken", "grilled", "raw")).thenReturn(null)
+        `when`(ingredientSearchService.lookupDocument("off:1234567890123")).thenReturn(offDoc)
+        // findOffDoc's lookups for the Ciqual item: bare id, then the off:-prefixed fallback.
+        `when`(ingredientSearchService.lookupDocument("chicken")).thenReturn(null)
+        `when`(ingredientSearchService.lookupDocument("off:chicken")).thenReturn(null)
+        val resolvedChicken = ResolvedFoodItem(chickenRequest, "chicken")
+        `when`(mlClientService.predict(listOf(resolvedChicken))).thenReturn(listOf(mlResponse()))
+
+        val result = nutritionService.getNutrition(listOf(chickenRequest, offRequest))
+
+        assertEquals(2, result.size)
+        assertEquals("ml", result[0].source)
+        assertEquals("off_direct", result[1].source)
+        assertEquals("raw", result[1].cookingMethod)
+        val captor = argumentCaptor<List<ResolvedFoodItem>>()
+        verify(mlClientService).predict(captor.capture())
+        assertEquals(1, captor.firstValue.size)
+        assertEquals("chicken", captor.firstValue[0].ingredientId)
+    }
+
+    @Test
+    fun `Ciqual item with no matching search document still falls through to ML`() {
+        stubResolution("chicken")
+        `when`(cacheService.find("chicken", "grilled", "raw")).thenReturn(null)
+        `when`(ingredientSearchService.lookupDocument("chicken")).thenReturn(null)
+        val resolvedChicken = ResolvedFoodItem(chickenRequest, "chicken")
+        `when`(mlClientService.predict(listOf(resolvedChicken))).thenReturn(listOf(mlResponse()))
+
+        val result = nutritionService.getNutrition(listOf(chickenRequest))
+
+        assertEquals(1, result.size)
+        assertEquals("ml", result[0].source)
     }
 
     @Test
@@ -183,6 +262,38 @@ class NutritionServiceTest {
         assertEquals(1, result.size)
         assertEquals(0.0, result[0].energyKcal)
         assertEquals(0.0, result[0].confidence)
+        assertEquals("unavailable", result[0].source)
+        assertEquals(false, result[0].available)
+    }
+
+    @Test
+    fun `ML result flagging an unknown ingredient is unavailable even above the confidence threshold`() {
+        stubResolution("chicken")
+        `when`(cacheService.find("chicken", "grilled", "raw")).thenReturn(null)
+        val resolvedChicken = ResolvedFoodItem(chickenRequest, "chicken")
+        val unknownIngredient = mlResponse(confidence = 0.7).copy(
+            ingredients = listOf(MlIngredientResult(ingredient_id = "chicken", weight_g = 100.0, unknown = true)),
+        )
+        `when`(mlClientService.predict(listOf(resolvedChicken))).thenReturn(listOf(unknownIngredient))
+
+        val result = nutritionService.getNutrition(listOf(chickenRequest))
+
+        assertEquals(false, result[0].available)
+    }
+
+    @Test
+    fun `ML response without a result is not written to the cache`() {
+        stubResolution("chicken")
+        val nullResultResponse = MlPredictionResponse(
+            cooking_type = "grilled", cooking_duration_min = null, ingredients = emptyList(), result = null,
+        )
+        `when`(cacheService.find("chicken", "grilled", "raw")).thenReturn(null)
+        val resolvedChicken = ResolvedFoodItem(chickenRequest, "chicken")
+        `when`(mlClientService.predict(listOf(resolvedChicken))).thenReturn(listOf(nullResultResponse))
+
+        nutritionService.getNutrition(listOf(chickenRequest))
+
+        verify(cacheService, never()).store(any())
     }
 
     @Test
@@ -201,6 +312,8 @@ class NutritionServiceTest {
         val bananaRequest = FoodItemRequest("banana", 1.0, "item", "raw", "raw")
         stubResolution("banana")
         `when`(ingredientSearchService.lookupDocument("banana")).thenReturn(SearchDoc(portionG = 120.0))
+        // findOffDoc's off:-prefixed fallback lookup, since this doc's productType isn't off_product.
+        `when`(ingredientSearchService.lookupDocument("off:banana")).thenReturn(null)
         `when`(cacheService.find("banana", "raw", "raw")).thenReturn(null)
         // effectiveWeightG = 1 * 120 = 120g → same scale as 100g request
         val resolvedBanana = ResolvedFoodItem(bananaRequest, "banana", effectiveWeightG = 120.0)
@@ -219,6 +332,8 @@ class NutritionServiceTest {
         val unknownRequest = FoodItemRequest("unknown_fruit", 2.0, "item", "raw", "raw")
         stubResolution("unknown_fruit")
         `when`(ingredientSearchService.lookupDocument("unknown_fruit")).thenReturn(null)
+        // findOffDoc's off:-prefixed fallback lookup, since the bare id resolved to no document.
+        `when`(ingredientSearchService.lookupDocument("off:unknown_fruit")).thenReturn(null)
         `when`(cacheService.find("unknown_fruit", "raw", "raw")).thenReturn(null)
         val resolvedItem = ResolvedFoodItem(unknownRequest, "unknown_fruit", effectiveWeightG = 2.0)
         `when`(mlClientService.predict(listOf(resolvedItem))).thenReturn(emptyList())

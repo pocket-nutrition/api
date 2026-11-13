@@ -28,4 +28,6 @@ data class FeedbackRequest(
     val measuredState: String? = null,
     @Schema(description = "Origin of the result shown to the user (ml/cache/off_direct/…)", nullable = true)
     val source: String? = null,
+    @Schema(description = "Which client surface this report came from", nullable = true, example = "community")
+    val sourceSurface: String? = null,
 )

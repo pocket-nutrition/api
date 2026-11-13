@@ -1,12 +1,17 @@
 package org.pocketnutrition.api.service
 
+import org.pocketnutrition.api.dto.FeedbackCorrection
+import org.pocketnutrition.api.dto.FeedbackReportResponse
+import org.pocketnutrition.api.dto.FeedbackReportsResponse
 import org.pocketnutrition.api.dto.FeedbackRequest
 import org.pocketnutrition.api.model.FeedbackReport
 import org.pocketnutrition.api.repository.FeedbackRepository
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import tools.jackson.databind.ObjectMapper
+import tools.jackson.module.kotlin.readValue
 import java.security.MessageDigest
 
 @Service
@@ -38,7 +43,8 @@ class FeedbackService(
             cookingMethod = request.cookingMethod?.trim()?.ifBlank { null },
             measuredState = request.measuredState?.trim()?.ifBlank { null },
             source = request.source?.trim()?.ifBlank { null },
-            sourceSurface = "sandbox",
+            // FeedbackController already rejects any non-blank value outside its allowlist.
+            sourceSurface = request.sourceSurface?.trim()?.ifBlank { null } ?: "sandbox",
             ipHash = hashIp(clientIp),
             userAgent = userAgent?.take(MAX_USER_AGENT_LENGTH),
             status = "new",
@@ -49,6 +55,30 @@ class FeedbackService(
                 it.id, it.ingredientId, it.resolved, request.corrections.size, !it.comment.isNullOrBlank(),
             )
         }
+    }
+
+    /**
+     * Public read path: reports for one ingredient, newest first, with moderation-only fields
+     * (reporter name, IP hash, user agent, status) stripped out. `offset` is expected to be a
+     * multiple of `limit` — callers only ever page forward by fixed-size increments — since it
+     * is translated into a Spring Data page index (offset / limit).
+     */
+    fun listByIngredient(ingredientId: String, offset: Int, limit: Int): FeedbackReportsResponse {
+        val page = feedbackRepository.findByIngredientIdOrderByCreatedAtDesc(
+            ingredientId, PageRequest.of(offset / limit, limit),
+        )
+        val reports = page.content.map { report ->
+            FeedbackReportResponse(
+                id = requireNotNull(report.id),
+                corrections = report.corrections?.let { objectMapper.readValue<List<FeedbackCorrection>>(it) } ?: emptyList(),
+                comment = report.comment,
+                cookingMethod = report.cookingMethod,
+                measuredState = report.measuredState,
+                sourceSurface = report.sourceSurface,
+                createdAt = report.createdAt,
+            )
+        }
+        return FeedbackReportsResponse(reports, page.totalElements)
     }
 
     // Privacy: store only a salted SHA-256 of the IP, never the raw value.

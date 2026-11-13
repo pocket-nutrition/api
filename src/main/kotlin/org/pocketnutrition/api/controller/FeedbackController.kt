@@ -1,5 +1,6 @@
 package org.pocketnutrition.api.controller
 
+import org.pocketnutrition.api.dto.FeedbackReportsResponse
 import org.pocketnutrition.api.dto.FeedbackRequest
 import org.pocketnutrition.api.service.FeedbackService
 import io.swagger.v3.oas.annotations.Operation
@@ -9,9 +10,11 @@ import io.swagger.v3.oas.annotations.tags.Tag
 import jakarta.servlet.http.HttpServletRequest
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
+import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
 
 @Tag(name = "Feedback", description = "Anonymous user feedback on ingredient data quality")
@@ -40,6 +43,8 @@ class FeedbackController(private val feedbackService: FeedbackService) {
         // A report must carry at least one structured correction OR a non-blank comment.
         if (request.corrections.isEmpty() && comment.isBlank()) return ResponseEntity.badRequest().build()
         if (request.corrections.size > MAX_CORRECTIONS) return ResponseEntity.badRequest().build()
+        val sourceSurface = request.sourceSurface?.trim()
+        if (!sourceSurface.isNullOrBlank() && sourceSurface !in ALLOWED_SOURCE_SURFACES) return ResponseEntity.badRequest().build()
         for (c in request.corrections) {
             // The code must belong to its declared category (rejects malformed-but-plausible payloads).
             val codes = CODES_BY_CATEGORY[c.category] ?: return ResponseEntity.badRequest().build()
@@ -50,6 +55,23 @@ class FeedbackController(private val feedbackService: FeedbackService) {
 
         feedbackService.submit(request, clientIp(httpRequest), httpRequest.getHeader("User-Agent"))
         return ResponseEntity.status(HttpStatus.CREATED).body(mapOf("status" to "received"))
+    }
+
+    @Operation(summary = "List public feedback reports for one ingredient, newest first")
+    @ApiResponses(
+        ApiResponse(responseCode = "200", description = "Reports for the ingredient, with moderation-only fields stripped"),
+        ApiResponse(responseCode = "400", description = "Blank ingredientId, or offset/limit out of range"),
+    )
+    @GetMapping
+    fun list(
+        @RequestParam ingredientId: String,
+        @RequestParam(defaultValue = "0") offset: Int,
+        @RequestParam(defaultValue = "5") limit: Int,
+    ): ResponseEntity<FeedbackReportsResponse> {
+        if (ingredientId.isBlank()) return ResponseEntity.badRequest().build()
+        if (offset < 0 || limit < 1 || limit > MAX_LIST_LIMIT) return ResponseEntity.badRequest().build()
+
+        return ResponseEntity.ok(feedbackService.listByIngredient(ingredientId, offset, limit))
     }
 
     // Cloudflare forwards the real client IP; Traefik trusts it. Fall back to the proxy chain / remote addr.
@@ -64,6 +86,11 @@ class FeedbackController(private val feedbackService: FeedbackService) {
         private const val MAX_VALUE_LENGTH = 200
         private const val MAX_UNIT_LENGTH = 20
         private const val MAX_CORRECTIONS = 20
+        private const val MAX_LIST_LIMIT = 50
+
+        // Known client surfaces. Defaults to "sandbox" in FeedbackService when absent, so
+        // older clients that don't send this field yet keep their current behaviour.
+        private val ALLOWED_SOURCE_SURFACES = setOf("sandbox", "community", "ios", "android")
 
         // Allowed specific-error codes per category — mirrors the sandbox feedbackCatalog.ts.
         private val CODES_BY_CATEGORY: Map<String, Set<String>> = mapOf(

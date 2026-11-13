@@ -1,6 +1,6 @@
 -- Public user feedback on ingredient data quality.
 -- Side-channel inbox: written only by pocket-nutrition-api, read only by pocket-nutrition-community.
--- NOT part of the knowledge pipeline (never mirrored to Redis / YAML files in a private repository / raw source tables).
+-- NOT part of the knowledge pipeline (never mirrored to Redis / knowledge YAML files / raw source tables).
 CREATE TABLE IF NOT EXISTS feedback_report (
     id              BIGSERIAL   PRIMARY KEY,
     reported_name   TEXT        NOT NULL,

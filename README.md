@@ -77,6 +77,20 @@ The `feedback_report` table and its `corrections` column are created by Flyway m
 > by default → no IP stored). To add throttling, attach a per-IP rate-limiting middleware to the
 > API Ingress in your own deployment manifests.
 
+## Confidence votes (anonymous)
+
+```
+POST /mappings/vote        GET /mappings/votes        — up/down votes on an ingredient↔source mapping
+POST /relationships/vote   GET /relationships/votes   — up/down votes on a raw→cooked relationship
+```
+
+Clients let people say whether a mapping (for example a Ciqual entry matched to an ingredient) or a
+cooking relationship looks right. Votes are anonymous and stored as per-item tallies
+(`mapping_vote_tally`, `relationship_vote_tally`, created by Flyway migrations `V3` and `V4`). Like
+feedback reports, they are never written back to the knowledge pipeline: the maintainers read the tallies
+and make the change in the knowledge repository themselves. See the OpenAPI document for the exact
+request and response shapes.
+
 ## Request flow
 
 ```

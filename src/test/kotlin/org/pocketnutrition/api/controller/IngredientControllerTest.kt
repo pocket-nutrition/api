@@ -1,6 +1,9 @@
 package org.pocketnutrition.api.controller
 
+import org.pocketnutrition.api.dto.IngredientDetailResponse
 import org.pocketnutrition.api.dto.IngredientSuggestion
+import org.pocketnutrition.api.dto.LocalizedText
+import org.pocketnutrition.api.dto.ReferenceNutritionResponse
 import org.pocketnutrition.api.dto.RecipeComponent
 import org.pocketnutrition.api.service.BarcodeService
 import org.pocketnutrition.api.service.DensityLookupService
@@ -233,9 +236,56 @@ class IngredientControllerTest {
 
     @Test
     fun `GET barcode returns 404 for unknown code`() {
-        `when`(barcodeService.findByBarcode("0000000000000")).thenReturn(null)
+        `when`(barcodeService.findByBarcode("0000000000000", null)).thenReturn(null)
 
         mockMvc.get("/ingredients/barcode/0000000000000").andExpect {
+            status { isNotFound() }
+        }
+    }
+
+    @Test
+    fun `GET detail returns the ingredient detail`() {
+        `when`(ingredientSearchService.detail("poulet_filet")).thenReturn(
+            IngredientDetailResponse(
+                ingredientId = "poulet_filet",
+                names = listOf(LocalizedText("fr", "Poulet, filet"), LocalizedText("en", "Chicken breast")),
+                aliases = listOf(LocalizedText("fr", "blanc de poulet")),
+                foodGroup = "meat",
+                referenceWeightG = 150.0,
+                displayUnit = "g",
+                canEatRaw = false,
+                canEatCooked = true,
+                typicalState = "cooked",
+                referenceNutrition = ReferenceNutritionResponse(
+                    energyKcal = 165.0,
+                    proteinG = 31.0,
+                    fatG = 3.6,
+                    carbohydratesG = 0.0,
+                    fiberG = null,
+                ),
+            ),
+        )
+
+        mockMvc.get("/ingredients/poulet_filet").andExpect {
+            status { isOk() }
+            jsonPath("$.ingredientId") { value("poulet_filet") }
+            jsonPath("$.names[0].lang") { value("fr") }
+            jsonPath("$.names[0].text") { value("Poulet, filet") }
+            jsonPath("$.names[1].lang") { value("en") }
+            jsonPath("$.names[1].text") { value("Chicken breast") }
+            jsonPath("$.aliases[0].text") { value("blanc de poulet") }
+            jsonPath("$.foodGroup") { value("meat") }
+            jsonPath("$.referenceWeightG") { value(150.0) }
+            jsonPath("$.referenceNutrition.energyKcal") { value(165.0) }
+            jsonPath("$.referenceNutrition.proteinG") { value(31.0) }
+        }
+    }
+
+    @Test
+    fun `GET detail returns 404 for an unknown ingredient id`() {
+        `when`(ingredientSearchService.detail("unknown_id")).thenReturn(null)
+
+        mockMvc.get("/ingredients/unknown_id").andExpect {
             status { isNotFound() }
         }
     }

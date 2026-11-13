@@ -12,7 +12,7 @@ data class MlMealInput(
 )
 
 /**
- * Raw nutritional profile per 100g (Ciqual-aligned schema) sourced from ingredient_profiles (Elasticsearch).
+ * Raw nutritional profile per 100g (Ciqual-aligned schema) sourced from the product_search index (Elasticsearch).
  * Sent to ML so it can build the feature vector without consulting its own food_index.
  */
 data class MlRawProfile(

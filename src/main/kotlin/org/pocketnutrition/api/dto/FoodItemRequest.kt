@@ -11,7 +11,9 @@ data class FoodItemRequest(
     @Schema(description = "Unit of measure", example = "g", allowableValues = ["g", "ml", "item"])
     val unit: String,
     @Schema(
-        description = "Cooking method applied to the ingredient",
+        description = "Cooking method applied to the ingredient. Ignored when the resolved " +
+            "ingredient is an Open Food Facts branded product — the response is always the " +
+            "product's own values with cookingMethod=\"raw\" and source=\"off_direct\".",
         example = "grilled",
         // Must stay in sync with the validation whitelist in NutritionController.getNutrition.
         allowableValues = ["raw", "boiled", "steamed", "grilled", "roasted", "fried", "cooked"]

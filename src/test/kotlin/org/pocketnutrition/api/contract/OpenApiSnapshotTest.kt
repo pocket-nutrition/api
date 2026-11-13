@@ -1,9 +1,15 @@
 package org.pocketnutrition.api.contract
 
+import org.mockito.kotlin.whenever
+import org.pocketnutrition.api.dto.ReferenceIntakeValue
+import org.pocketnutrition.api.dto.ReferenceIntakesResponse
 import org.pocketnutrition.api.repository.NutritionCacheRepository
 import org.pocketnutrition.api.service.FeedbackService
 import org.pocketnutrition.api.service.IngredientResolutionService
 import org.pocketnutrition.api.service.IngredientSearchService
+import org.pocketnutrition.api.service.MappingVoteService
+import org.pocketnutrition.api.service.ReferenceIntakeService
+import org.pocketnutrition.api.service.RelationshipVoteService
 import java.io.File
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -58,6 +64,16 @@ class OpenApiSnapshotTest {
 
     @MockitoBean
     private lateinit var feedbackService: FeedbackService
+
+    @MockitoBean
+    private lateinit var mappingVoteService: MappingVoteService
+
+    @MockitoBean
+    private lateinit var relationshipVoteService: RelationshipVoteService
+
+    // Depends on the JPA EfsaDrvValueRepository (JPA auto-config is excluded above), so mock it.
+    @MockitoBean
+    private lateinit var referenceIntakeService: ReferenceIntakeService
 
     @Test
     fun `committed contract snapshot matches the generated document`() {
@@ -138,6 +154,36 @@ class OpenApiSnapshotTest {
         )
     }
 
+    /**
+     * The wire and the spec must name fields identically, or a generated client fails to decode a
+     * required field. Kotlin booleans named `isX` are the trap: Jackson keeps `isMale` on the wire
+     * while springdoc's schema resolver strips the prefix and documents `male`.
+     */
+    @Test
+    fun `reference intake fields are named the same on the wire and in the spec`() {
+        val value = ReferenceIntakeValue(
+            nutrient = "Iron", nutrientKey = "ironMg", classification = "Minerals",
+            population = "Adults", populationDescription = "Adults",
+            ageFrom = 18.0, ageTo = 999.0, ageUnit = "y", ageLabel = "≥ 18 years", pal = 1.6,
+            sex = "Male", isMale = true, isFemale = false,
+            valueKind = "pri", raw = "11", valueMin = 11.0, valueMax = 11.0, isIncrement = false,
+            unit = "mg/day", sourceLink = "https://example.org", note = "note",
+        )
+        whenever(referenceIntakeService.referenceIntakes())
+            .thenReturn(ReferenceIntakesResponse(source = "s", sourceUrl = "u", values = listOf(value)))
+
+        val wire = ObjectMapper().readTree(
+            mockMvc.get("/reference-intakes").andReturn().response.getContentAsString(Charsets.UTF_8)
+        ).path("values").path(0)
+        val wireKeys = wire.propertyNames().asSequence().toSet()
+
+        val specKeys = ObjectMapper().readTree(fetchSpecPrettyPrinted())
+            .path("components").path("schemas").path("ReferenceIntakeValue").path("properties")
+            .propertyNames().asSequence().toSet()
+
+        assertEquals(specKeys, wireKeys, "ReferenceIntakeValue: spec property names differ from the JSON the API sends")
+    }
+
     @Test
     fun `document version matches the configured contract version`() {
         val doc = ObjectMapper().readTree(fetchSpecPrettyPrinted())
@@ -170,6 +216,6 @@ class OpenApiSnapshotTest {
          * `src/main/resources/application.properties` and `src/test/resources/application.properties`
          * — three places in total.
          */
-        const val EXPECTED_CONTRACT_VERSION = "1.3.0"
+        const val EXPECTED_CONTRACT_VERSION = "2.5.1"
     }
 }

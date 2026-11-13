@@ -7,6 +7,8 @@ data class NutritionalProfileResponse(
     val name: String,
     @Schema(description = "Measured quantity") val quantity: Double,
     @Schema(description = "Unit of measure", allowableValues = ["g"]) val unit: String,
+    @Schema(description = "Cooking method the values reflect. Always \"raw\" when source=\"off_direct\" " +
+        "(the client-requested cooking method is ignored for Open Food Facts branded products).")
     val cookingMethod: String,
     @Schema(description = "Whether the quantity was measured before or after cooking",
             allowableValues = ["raw", "cooked"]) val measuredState: String,

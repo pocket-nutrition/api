@@ -37,13 +37,29 @@ class NutritionService(
     }
 
     fun getNutritionForResolved(resolvedItems: List<ResolvedFoodItem>): List<NutritionalProfileResponse> {
-        val cacheHits: List<CachedNutritionResult?> = resolvedItems.map {
-            cacheService.find(it.ingredientId, it.request.cookingMethod, it.request.measuredState)
+        // Open Food Facts products are returned as-is (their own values, cookingMethod="raw"): the
+        // ML cooking-transform model was trained only on raw-whole-food -> cooked-whole-food pairs
+        // (Ciqual/McCance/USDA) and has never seen an industrial/packaged product, so running it on
+        // one would extrapolate outside its training distribution. These items also bypass the
+        // nutrition cache entirely — building the response below is already a single ES lookup, and
+        // the cache key embeds the *requested* cooking method, which would churn on every different
+        // request and would disagree with the forced "raw" result once caching is re-enabled.
+        val offResponses: Map<Int, NutritionalProfileResponse> = resolvedItems.withIndex()
+            .mapNotNull { (idx, item) ->
+                ingredientSearchService.findOffDoc(item.ingredientId)?.let { doc ->
+                    val hasData = doc.energyKcal != null || doc.proteinG != null
+                    idx to doc.toOffCachedResult(item.ingredientId, item.request.name ?: item.ingredientId)
+                        .toResponse(item.request, item.effectiveWeightG)
+                        .copy(available = hasData)
+                }
+            }
+            .toMap()
+
+        val cacheHits: List<CachedNutritionResult?> = resolvedItems.mapIndexed { idx, item ->
+            if (idx in offResponses) null else cacheService.find(item.ingredientId, item.request.cookingMethod, item.request.measuredState)
         }
 
-        val missIndices = cacheHits.indices.filter { cacheHits[it] == null }
-
-        val mlMissIndices = missIndices
+        val mlMissIndices = cacheHits.indices.filter { it !in offResponses && cacheHits[it] == null }
         val mlPredictions: List<MlPredictionResponse> = if (mlMissIndices.isNotEmpty()) {
             mlClientService.predict(mlMissIndices.map { resolvedItems[it] })
         } else {
@@ -51,7 +67,8 @@ class NutritionService(
         }
 
         mlPredictions.forEachIndexed { i, prediction ->
-            if (i < mlMissIndices.size) {
+            // A missing or unknown-ingredient result is "no data", not a profile of zeros: never cache it.
+            if (i < mlMissIndices.size && prediction.isUsable()) {
                 cacheService.store(prediction.toCachedResult(resolvedItems[mlMissIndices[i]]))
             }
         }
@@ -65,12 +82,26 @@ class NutritionService(
         return resolvedItems.mapIndexed { idx, item ->
             val cached = cacheHits[idx]
             when {
+                offResponses.containsKey(idx) -> offResponses[idx]!!
                 cached != null -> cached.toResponse(item.request, item.effectiveWeightG)
-                mlByIndex.containsKey(idx) -> mlByIndex[idx]!!.toResponse(item)
+                mlByIndex.containsKey(idx) -> mlByIndex.getValue(idx).let { prediction ->
+                    if (prediction.result == null) unavailableResponse(item.request) else prediction.toResponse(item)
+                }
                 else -> unavailableResponse(item.request)
             }
         }
     }
+
+    /**
+     * An OFF product document for this ingredient id, if any. Tries the id as given, then the
+     * `off:`-prefixed convention `RawProfileLookupService` also falls back to, since search results
+     * already carry the `off:` prefix while the barcode endpoint's id is bare.
+     */
+    private fun IngredientSearchService.findOffDoc(ingredientId: String): SearchDoc? =
+        lookupDocument(ingredientId)?.takeIf { it.productType == "off_product" }
+            ?: ingredientId.takeUnless { it.startsWith("off:") }
+                ?.let { lookupDocument("off:$it") }
+                ?.takeIf { it.productType == "off_product" }
 
     private fun unavailableResponse(item: FoodItemRequest) = NutritionalProfileResponse(
         name = item.name ?: item.ingredientId ?: "", quantity = item.quantity, unit = item.unit,
@@ -124,8 +155,13 @@ private fun MlPredictionResponse.toCachedResult(item: ResolvedFoodItem): CachedN
 
 private const val MIN_CONFIDENCE = 0.6
 
+/** ML flags an ingredient as unknown when it had no raw profile to transform. */
+private fun MlPredictionResponse.hasUnknownIngredient(): Boolean = ingredients.any { it.unknown }
+
+private fun MlPredictionResponse.isUsable(): Boolean = result != null && !hasUnknownIngredient()
+
 // Cached values are per-100g; scale to the effective gram weight.
-private fun CachedNutritionResult.toResponse(item: FoodItemRequest, effectiveWeightG: Double): NutritionalProfileResponse {
+internal fun CachedNutritionResult.toResponse(item: FoodItemRequest, effectiveWeightG: Double): NutritionalProfileResponse {
     val scale = effectiveWeightG / 100.0
     return NutritionalProfileResponse(
         name = name, quantity = item.quantity, unit = item.unit,
@@ -193,8 +229,6 @@ private fun MlPredictionResponse.toResponse(item: ResolvedFoodItem): Nutritional
         niacinMg = r?.niacin_mg,
         confidence = confidence,
         source = "ml",
-        available = confidence >= MIN_CONFIDENCE,
+        available = confidence >= MIN_CONFIDENCE && !hasUnknownIngredient(),
     )
 }
-
-private fun Double?.finite(): Double? = if (this == null || !isFinite()) null else this

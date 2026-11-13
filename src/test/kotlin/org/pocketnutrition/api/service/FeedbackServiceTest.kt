@@ -10,9 +10,13 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
+import org.springframework.data.domain.PageImpl
+import org.springframework.data.domain.PageRequest
 import tools.jackson.databind.json.JsonMapper
+import java.time.Instant
 
 class FeedbackServiceTest {
 
@@ -79,5 +83,74 @@ class FeedbackServiceTest {
 
         assertEquals(64, r.ipHash?.length) // SHA-256 hex
         assertTrue(r.ipHash?.contains("1.2.3.4") != true)
+    }
+
+    @Test
+    fun `defaults source surface to sandbox when absent`() {
+        whenever(resolution.resolve(any())).thenReturn(null)
+        echoSave()
+
+        val r = service().submit(FeedbackRequest(name = "rice", comment = "x"), null, null)
+
+        assertEquals("sandbox", r.sourceSurface)
+    }
+
+    @Test
+    fun `stores the given source surface`() {
+        whenever(resolution.resolve(any())).thenReturn(null)
+        echoSave()
+
+        val r = service().submit(FeedbackRequest(name = "rice", comment = "x", sourceSurface = "community"), null, null)
+
+        assertEquals("community", r.sourceSurface)
+    }
+
+    @Test
+    fun `lists reports for an ingredient with corrections parsed back to structured objects, newest first`() {
+        val stored = FeedbackReport(
+            reportedName = "riz",
+            corrections = """[{"category":"measures","code":"reference_weight","value":"180","unit":"g"}]""",
+            comment = null,
+            ingredientId = "rice",
+            cookingMethod = "raw",
+            measuredState = "raw",
+            sourceSurface = "community",
+            createdAt = Instant.parse("2026-01-01T00:00:00Z"),
+        ).also { it.id = 42L }
+        whenever(repository.findByIngredientIdOrderByCreatedAtDesc(eq("rice"), eq(PageRequest.of(0, 5))))
+            .thenReturn(PageImpl(listOf(stored), PageRequest.of(0, 5), 1))
+
+        val result = service().listByIngredient("rice", offset = 0, limit = 5)
+
+        assertEquals(1L, result.total)
+        val report = result.reports.single()
+        assertEquals(42L, report.id)
+        assertEquals("community", report.sourceSurface)
+        val correction = report.corrections.single()
+        assertEquals("measures", correction.category)
+        assertEquals("reference_weight", correction.code)
+        assertEquals("180", correction.value)
+        assertEquals("g", correction.unit)
+    }
+
+    @Test
+    fun `comment-only report lists with an empty corrections list`() {
+        val stored = FeedbackReport(
+            reportedName = "riz",
+            corrections = null,
+            comment = "devrait permettre une pincée",
+            ingredientId = "rice",
+            sourceSurface = "sandbox",
+            createdAt = Instant.parse("2026-01-01T00:00:00Z"),
+        ).also { it.id = 7L }
+        whenever(repository.findByIngredientIdOrderByCreatedAtDesc(eq("rice"), eq(PageRequest.of(1, 5))))
+            .thenReturn(PageImpl(listOf(stored), PageRequest.of(1, 5), 6))
+
+        val result = service().listByIngredient("rice", offset = 5, limit = 5)
+
+        assertEquals(6L, result.total)
+        val report = result.reports.single()
+        assertTrue(report.corrections.isEmpty())
+        assertEquals("devrait permettre une pincée", report.comment)
     }
 }

@@ -7,6 +7,7 @@ import co.elastic.clients.elasticsearch.core.SearchResponse
 import co.elastic.clients.elasticsearch.core.search.HitsMetadata
 import co.elastic.clients.util.ObjectBuilder
 import org.pocketnutrition.api.dto.IngredientSuggestion
+import org.pocketnutrition.api.dto.LocalizedText
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.extension.ExtendWith
@@ -335,7 +336,7 @@ class IngredientSearchServiceTest {
         val pkg = units.single { it.unit == "package" }
         assertEquals(125.0, pkg.grams)
         assertEquals(0.0, pkg.volumeMl)
-        assertEquals("unité", pkg.labelFr)
+        assertEquals("unité", pkg.labels.first { it.lang == "fr" }.text)
     }
 
     @Test
@@ -365,7 +366,7 @@ class IngredientSearchServiceTest {
 
         assertEquals(100.0, serving.grams)
         assertEquals(0.0, serving.volumeMl)
-        assertEquals("part", serving.labelFr)
+        assertEquals("part", serving.labels.first { it.lang == "fr" }.text)
     }
 
     @Test
@@ -385,5 +386,82 @@ class IngredientSearchServiceTest {
         val units = service.computeServingUnits(SearchDoc(packageSizeG = 0.0, servingSizeG = -5.0))
 
         assertTrue(units.none { it.unit == "package" || it.unit == "serving" })
+    }
+
+    // --- toDetail ---------------------------------------------------------------------------------
+
+    @Test
+    fun `toDetail splits the first label per language from its aliases`() {
+        val doc = SearchDoc(
+            productId = "poulet_filet",
+            foodGroup = "meat",
+            labels = listOf(
+                LabelDoc(lang = "fr", text = "Poulet, filet"),
+                LabelDoc(lang = "fr", text = "blanc de poulet"),
+                LabelDoc(lang = "en", text = "Chicken breast"),
+            ),
+        )
+
+        val detail = service.toDetail("poulet_filet", doc)
+
+        assertEquals(
+            listOf(LocalizedText("fr", "Poulet, filet"), LocalizedText("en", "Chicken breast")),
+            detail.names,
+        )
+        assertEquals(listOf(LocalizedText("fr", "blanc de poulet")), detail.aliases)
+        assertEquals("meat", detail.foodGroup)
+    }
+
+    @Test
+    fun `toDetail falls back to the requested id when the document carries no product_id`() {
+        val detail = service.toDetail("some_id", SearchDoc())
+
+        assertEquals("some_id", detail.ingredientId)
+        assertTrue(detail.names.isEmpty())
+        assertTrue(detail.aliases.isEmpty())
+    }
+
+    @Test
+    fun `toDetail carries the reference nutrition profile when energy or protein is present`() {
+        val doc = SearchDoc(energyKcal = 165.0, proteinG = 31.0, fatG = 3.6, carbohydratesG = 0.0, fiberG = null)
+
+        val nutrition = service.toDetail("id", doc).referenceNutrition
+
+        assertEquals(165.0, nutrition?.energyKcal)
+        assertEquals(31.0, nutrition?.proteinG)
+        assertEquals(3.6, nutrition?.fatG)
+        assertEquals(0.0, nutrition?.carbohydratesG)
+        assertNull(nutrition?.fiberG)
+    }
+
+    @Test
+    fun `toDetail omits the reference nutrition profile when neither energy nor protein is known`() {
+        // Distinguishes "no nutrient data at all" (e.g. a recipe) from "this one field happens to be
+        // null" — a client should not render an empty nutrition block for the former.
+        val detail = service.toDetail("id", SearchDoc(fiberG = 2.0))
+
+        assertNull(detail.referenceNutrition)
+    }
+
+    @Test
+    fun `toDetail carries reference weight, display unit, serving units and eating state through`() {
+        val doc = SearchDoc(
+            portionG = 150.0,
+            displayUnit = "g",
+            canEatRaw = false,
+            canEatCooked = true,
+            typicalState = "cooked",
+            servingUnitTypes = listOf("tablespoon"),
+            densityGMl = 1.0,
+        )
+
+        val detail = service.toDetail("id", doc)
+
+        assertEquals(150.0, detail.referenceWeightG)
+        assertEquals("g", detail.displayUnit)
+        assertEquals(false, detail.canEatRaw)
+        assertEquals(true, detail.canEatCooked)
+        assertEquals("cooked", detail.typicalState)
+        assertTrue(detail.servingUnits.any { it.unit == "tablespoon" })
     }
 }
