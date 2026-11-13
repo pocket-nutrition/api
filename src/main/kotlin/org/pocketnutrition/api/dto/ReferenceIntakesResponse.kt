@@ -1,6 +1,7 @@
 package org.pocketnutrition.api.dto
 
 import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.annotation.JsonPropertyOrder
 import io.swagger.v3.oas.annotations.media.Schema
 
 @Schema(description = "Dietary reference values for every nutrient and population group, the same full table for every caller (the request carries no personal data); the client picks the rows that match its user")
@@ -12,6 +13,13 @@ data class ReferenceIntakesResponse(
     val values: List<ReferenceIntakeValue>,
 )
 
+// Pinned so the generated OpenAPI schema lists the properties in a stable order: without it the
+// position of the `is*` booleans varies between runs and breaks OpenApiSnapshotTest.
+@JsonPropertyOrder(
+    "nutrient", "nutrientKey", "classification", "population", "populationDescription", "ageFrom", "ageTo",
+    "ageUnit", "ageLabel", "pal", "sex", "valueKind", "raw", "valueMin", "valueMax", "unit", "sourceLink", "note",
+    "isMale", "isFemale", "isIncrement",
+)
 @Schema(description = "One reference value: a nutrient, a population group, a value kind and its bounds")
 data class ReferenceIntakeValue(
     @Schema(description = "Nutrient name as EFSA publishes it", example = "Iron")
