@@ -10,7 +10,9 @@ class WebConfig : WebMvcConfigurer {
         registry.addMapping("/**")
             .allowedOrigins(
                 "https://showcase.pocketnutrition.org",
-                "https://website.pocketnutrition.org",
+                // The published site, and its preview build that still carries the docs under review.
+                "https://pocketnutrition.org",
+                "https://website-beta.pocketnutrition.org",
                 "https://sandbox.pocketnutrition.org",
                 // The vault web viewer reads GET /reference-intakes to show daily targets.
                 "https://me.pocketnutrition.org",
