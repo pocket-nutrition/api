@@ -27,7 +27,7 @@ class FeedbackServiceTest {
     private fun service(salt: String = "") = FeedbackService(repository, resolution, objectMapper, salt)
 
     private fun echoSave() {
-        whenever(repository.save(any())).thenAnswer { it.arguments[0] as FeedbackReport }
+        whenever(repository.save(any<FeedbackReport>())).thenAnswer { it.arguments[0] as FeedbackReport }
     }
 
     @Test

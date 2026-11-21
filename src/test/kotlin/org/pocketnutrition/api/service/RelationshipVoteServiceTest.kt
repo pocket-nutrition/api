@@ -19,7 +19,7 @@ class RelationshipVoteServiceTest {
     @Test
     fun `first vote on an untracked relationship creates its tally row`() {
         whenever(repository.incrementCounts("chicken_breast", "grilled", 1, 0)).thenReturn(0)
-        whenever(repository.save(any())).thenAnswer { it.arguments[0] as RelationshipVoteTally }
+        whenever(repository.save(any<RelationshipVoteTally>())).thenAnswer { it.arguments[0] as RelationshipVoteTally }
         whenever(repository.findByIngredientIdAndCookingMethod("chicken_breast", "grilled"))
             .thenReturn(RelationshipVoteTally("chicken_breast", "grilled", upvotes = 1, downvotes = 0))
 

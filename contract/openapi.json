@@ -1100,6 +1100,7 @@
             "description" : "Typical eating state from the knowledge base: 'raw' or 'cooked'; null when unknown"
           },
           "referenceNutrition" : {
+            "description" : "Reference macro-nutrient profile per 100 g; null when no nutrient data is available",
             "oneOf" : [ {
               "$ref" : "#/components/schemas/ReferenceNutritionResponse"
             }, {
@@ -1211,6 +1212,7 @@
             "example" : 100.0
           },
           "nutrition" : {
+            "description" : "Nutritional profile for the requested quantity/cooking context; null when not requested",
             "oneOf" : [ {
               "$ref" : "#/components/schemas/NutritionalProfileResponse"
             }, {

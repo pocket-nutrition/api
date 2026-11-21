@@ -19,7 +19,7 @@ class MappingVoteServiceTest {
     @Test
     fun `first vote on an untracked association creates its tally row`() {
         whenever(repository.incrementCounts("ciqual", "9102", "raw", 1, 0)).thenReturn(0)
-        whenever(repository.save(any())).thenAnswer { it.arguments[0] as MappingVoteTally }
+        whenever(repository.save(any<MappingVoteTally>())).thenAnswer { it.arguments[0] as MappingVoteTally }
         whenever(repository.findBySourceAndSourceIdAndCookingMethod("ciqual", "9102", "raw"))
             .thenReturn(MappingVoteTally("ciqual", "9102", "raw", upvotes = 1, downvotes = 0))
 
